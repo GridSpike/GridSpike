@@ -1,0 +1,8 @@
+[build]
+builder = "nixpacks"
+buildCommand = "pnpm install && pnpm db:generate && pnpm --filter=@gridspike/server build"
+
+[deploy]
+startCommand = "cd apps/server && node dist/main"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10

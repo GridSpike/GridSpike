@@ -1,0 +1,16 @@
+[phases.setup]
+nixPkgs = ["nodejs_20", "pnpm"]
+
+[phases.install]
+cmds = [
+  "pnpm install --frozen-lockfile"
+]
+
+[phases.build]
+cmds = [
+  "pnpm db:generate",
+  "pnpm --filter=@gridspike/server build"
+]
+
+[start]
+cmd = "cd apps/server && pnpm run start:prod"

@@ -1,0 +1,61 @@
+# Ignore unnecessary files for deployment
+node_modules
+.git
+.github
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Development files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Test files
+test/
+tests/
+**/*.test.ts
+**/*.spec.ts
+**/*.test.js
+**/*.spec.js
+
+# Documentation (optional - keep if you want)
+# docs/
+# *.md
+
+# Client build artifacts (we're deploying server only)
+apps/client/dist
+apps/client/node_modules
+
+# Environment files
+.env
+.env.local
+.env.development
+.env.test
+
+# Misc
+.DS_Store
+*.pem
+.cache
+dist-ssr
+coverage
+
+# Docker files (not needed on Railway)
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# Local database
+*.db
+*.sqlite
+postgres_data/
+redis_data/
+
+# Notebooks
+*.ipynb
+btc_ticks.csv
+trial.ipynb

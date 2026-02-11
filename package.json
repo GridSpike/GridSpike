@@ -10,8 +10,11 @@
     "dev:client": "turbo dev --filter=@gridspike/client",
     "dev:server": "turbo dev --filter=@gridspike/server",
     "db:migrate": "pnpm --filter=@gridspike/server prisma migrate dev",
+    "db:migrate:deploy": "pnpm --filter=@gridspike/server prisma migrate deploy",
     "db:generate": "pnpm --filter=@gridspike/server prisma generate",
-    "db:studio": "pnpm --filter=@gridspike/server prisma studio"
+    "db:studio": "pnpm --filter=@gridspike/server prisma studio",
+    "railway:build": "pnpm install && pnpm db:generate && pnpm --filter=@gridspike/server build",
+    "railway:start": "cd apps/server && node dist/main"
   },
   "devDependencies": {
     "turbo": "^2.0.0"

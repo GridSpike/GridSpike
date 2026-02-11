@@ -38,19 +38,105 @@ GITHUB_PAGES=true VITE_API_URL=https://your-api.com pnpm build
 GitHub Pages **cannot** host the server. Choose one:
 
 ### Option 1: Railway (Recommended - Easy)
-```bash
-# Install Railway CLI
-npm i -g @railway/cli
 
-# Login and init
+**Prerequisites:**
+- Railway account ([railway.app](https://railway.app))
+- Railway CLI installed
+
+**Step 1: Install Railway CLI**
+```bash
+npm i -g @railway/cli
+```
+
+**Step 2: Login to Railway**
+```bash
 railway login
+```
+
+**Step 3: Create a New Project**
+```bash
+# Initialize Railway project in your repo
 railway init
 
-# Deploy
+# This will create a new project on Railway
+```
+
+**Step 4: Add PostgreSQL Database**
+```bash
+# Add PostgreSQL to your project
+railway add --database postgresql
+```
+
+**Step 5: Add Redis**
+```bash
+# Add Redis to your project
+railway add --service redis
+```
+
+**Step 6: Set Environment Variables**
+
+Go to your Railway dashboard or use CLI:
+
+```bash
+# Set environment variables
+railway variables set JWT_SECRET="your-super-secret-jwt-key-change-in-production"
+railway variables set JWT_REFRESH_SECRET="your-super-secret-refresh-key-change-in-production"
+railway variables set CORS_ORIGIN="https://yourusername.github.io"
+railway variables set PORT=4000
+```
+
+**Important:** Railway automatically provides:
+- `DATABASE_URL` (from PostgreSQL service)
+- `REDIS_URL` (from Redis service)
+
+**Step 7: Deploy**
+```bash
+# Deploy the server to Railway
 railway up
 
-# Add environment variables in Railway dashboard
+# Or link to GitHub for automatic deployments
+railway link
 ```
+
+**Step 8: Run Database Migrations**
+```bash
+# After first deploy, run migrations
+railway run pnpm db:migrate
+```
+
+**Step 9: Get Your Server URL**
+```bash
+# Generate a public domain
+railway domain
+
+# Your server will be available at: https://your-app.up.railway.app
+```
+
+**Step 10: Update Client Environment Variables**
+
+Use your Railway server URL in the client deployment:
+- `VITE_API_URL`: `https://your-app.up.railway.app`
+- `VITE_WS_URL`: `https://your-app.up.railway.app`
+
+**Configuration Files:**
+- `railway.json` / `railway.toml`: Build and deploy configuration
+- `nixpacks.toml`: Build system configuration
+
+**Automatic Deployments (Recommended):**
+1. Go to Railway dashboard → Your Project → Settings
+2. Connect your GitHub repository
+3. Enable automatic deployments on push to main branch
+4. Railway will automatically deploy when you push changes
+
+**Monitoring:**
+- View logs: `railway logs`
+- Check status: `railway status`
+- Open dashboard: `railway open`
+
+**Troubleshooting:**
+- If migrations fail, run: `railway run pnpm --filter=@gridspike/server prisma migrate deploy`
+- Check logs for errors: `railway logs --tail 100`
+- Verify environment variables: `railway variables`
 
 ### Option 2: Render
 1. Create account at [render.com](https://render.com)
