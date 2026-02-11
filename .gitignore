@@ -35,3 +35,14 @@ next-env.d.ts
 
 # vite
 .vite
+
+# turbo
+.turbo
+
+# prisma
+apps/server/prisma/*.db
+apps/server/prisma/*.db-journal
+
+# env files in apps
+apps/*/.env
+apps/*/.env.local

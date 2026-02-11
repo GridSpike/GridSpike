@@ -1,0 +1,68 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  username     String   @unique
+  passwordHash String
+  balance      Decimal  @default(1000) @db.Decimal(18, 2)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  bets         Bet[]
+  transactions Transaction[]
+
+  @@index([email])
+  @@index([username])
+}
+
+model Bet {
+  id                String    @id @default(uuid())
+  userId            String
+  user              User      @relation(fields: [userId], references: [id])
+  amount            Decimal   @db.Decimal(18, 2)
+  multiplier        Decimal   @db.Decimal(5, 2)
+  priceLevel        Decimal   @db.Decimal(18, 2)
+  targetTick        Int
+  gridRow           Int
+  gridCol           Int
+  status            BetStatus @default(ACTIVE)
+  payout            Decimal?  @db.Decimal(18, 2)
+  priceAtPlacement  Decimal   @db.Decimal(18, 2)
+  priceAtSettlement Decimal?  @db.Decimal(18, 2)
+  placedAt          DateTime  @default(now())
+  settledAt         DateTime?
+
+  transaction Transaction?
+
+  @@index([userId, status])
+  @@index([status, targetTick])
+}
+
+model Transaction {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  type          String
+  amount        Decimal  @db.Decimal(18, 2)
+  balanceBefore Decimal  @db.Decimal(18, 2)
+  balanceAfter  Decimal  @db.Decimal(18, 2)
+  betId         String?  @unique
+  bet           Bet?     @relation(fields: [betId], references: [id])
+  createdAt     DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+enum BetStatus {
+  ACTIVE
+  WON
+  LOST
+}
