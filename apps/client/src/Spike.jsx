@@ -13,14 +13,15 @@ function computeSMA(data, w) {
 }
 
 const TICK_MS = 500;
-const GRID_COLS = 7;
-const GRID_ROWS = 13;
+const CELL_SIZE = 35; // Square cells in pixels
 const PSTEP = 20;
-const TICKS_COL = 15;
+const TICKS_COL = 5;
 const MIN_TICKS_BEFORE_START = 20;
 const BET_SIZES = [1, 5, 10, 50];
 const SMA_WINDOW = 12;
-const MIN_FUTURE_COLS = 2;
+const MIN_FUTURE_COLS = 3;
+const GRID_COLS = 10;
+const SLOT_GROUP = 3;
 
 function snapPrice(price) {
   return Math.round(price / PSTEP) * PSTEP;
@@ -30,7 +31,7 @@ function calcMult(distFromCenter, colIdx) {
   const d = Math.abs(distFromCenter);
   const tf = 1 + (GRID_COLS - colIdx - 1) * 0.12;
   const pf = 1 + d * 0.65 + d * d * 0.1;
-  return Math.round(Math.min(1.6 + (pf * tf - 1) * 1.05, 35) * 100) / 100;
+  return Math.round(Math.min(1.6 + (pf * tf - 1) * 1.05, 35) / 2 * 100) / 100;
 }
 
 function formatTime(date) {
@@ -42,7 +43,7 @@ export default function Spike() {
   const [smaData, setSmaData] = useState([]);
   const [tick, setTick] = useState(0);
   const [bets, setBets] = useState([]);
-  const [balance, setBalance] = useState(1000);
+  const [balance, setBalance] = useState(200);
   const [betSize, setBetSize] = useState(5);
   const [toasts, setToasts] = useState([]);
   const [floats, setFloats] = useState([]);
@@ -51,11 +52,13 @@ export default function Spike() {
   const [showSMA, setShowSMA] = useState(true);
   const [connectionStatus, setConnectionStatus] = useState("connecting");
 
-  // View state - manual pan and zoom
-  const [viewCenterPrice, setViewCenterPrice] = useState(null); // null = auto-init from first price
-  const [viewCenterSlot, setViewCenterSlot] = useState(null); // null = auto-follow current slot
-  const [zoom, setZoom] = useState(1); // 1 = default, >1 = zoomed in, <1 = zoomed out
+  // View state - pixel-based pan offsets for smooth scrolling
+  const [panOffsetX, setPanOffsetX] = useState(0); // pixels offset from default view
+  const [panOffsetY, setPanOffsetY] = useState(0); // pixels offset from default view
+  const [zoom, setZoom] = useState(1);
+  const [initialPriceLevel, setInitialPriceLevel] = useState(null);
 
+  const lastSettledTick = useRef(-1);
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const toastId = useRef(0);
@@ -100,8 +103,8 @@ export default function Spike() {
           setSmaData(computeSMA(newData, SMA_WINDOW));
 
           // Initialize view center on first price
-          if (viewCenterPrice === null && roundedPrice > 0) {
-            setViewCenterPrice(snapPrice(roundedPrice));
+          if (initialPriceLevel === null && roundedPrice > 0) {
+            setInitialPriceLevel(snapPrice(roundedPrice));
           }
 
           return newData;
@@ -116,7 +119,7 @@ export default function Spike() {
       clearInterval(tickInterval);
       if (ws.readyState === WebSocket.OPEN) ws.close();
     };
-  }, [running, viewCenterPrice]);
+  }, [running, initialPriceLevel]);
 
   const currentPrice = priceData[priceData.length - 1] || 0;
   const isReady = priceData.length >= MIN_TICKS_BEFORE_START && currentPrice > 0;
@@ -125,72 +128,75 @@ export default function Spike() {
   // Slot system
   const getSlot = useCallback((t) => Math.floor(t / TICKS_COL), []);
   const currentSlot = getSlot(tick);
+  const displaySlot = Math.floor(currentSlot / SLOT_GROUP) * SLOT_GROUP;
   const firstBettableSlot = currentSlot + MIN_FUTURE_COLS;
 
-  // View calculations with zoom
-  const baseGridCols = GRID_COLS;
-  const baseGridRows = GRID_ROWS;
-  const visibleCols = Math.round(baseGridCols / zoom);
-  const visibleRows = Math.round(baseGridRows / zoom);
-
-  // Effective view center (use current slot for X if not manually set)
-  const effectiveViewSlot = viewCenterSlot !== null ? viewCenterSlot : currentSlot + Math.floor(visibleCols / 2);
-  const effectiveViewPrice = viewCenterPrice || currentPriceLevel;
-
-  // Visible slots based on view center
-  const visibleSlots = useMemo(() => {
-    const halfCols = Math.floor(visibleCols / 2);
-    const startSlot = effectiveViewSlot - halfCols;
-    return Array.from({ length: visibleCols }, (_, i) => startSlot + i);
-  }, [effectiveViewSlot, visibleCols]);
-
-  // Visible price levels based on view center
-  const visiblePriceLevels = useMemo(() => {
-    const halfRows = Math.floor(visibleRows / 2);
-    const levels = [];
-    for (let i = 0; i < visibleRows; i++) {
-      levels.push(effectiveViewPrice + (halfRows - i) * PSTEP);
-    }
-    return levels;
-  }, [effectiveViewPrice, visibleRows]);
-
-  // Visible range for rendering
-  const minVisiblePrice = visiblePriceLevels[visiblePriceLevels.length - 1] - PSTEP;
-  const maxVisiblePrice = visiblePriceLevels[0] + PSTEP;
-  const minVisibleTick = visibleSlots[0] * TICKS_COL;
-  const maxVisibleTick = (visibleSlots[visibleSlots.length - 1] + 1) * TICKS_COL;
-  const totalVisTicks = maxVisibleTick - minVisibleTick;
+  // Square cell size with zoom
+  const cellSize = CELL_SIZE * zoom;
 
   const getContainerSize = useCallback(() => {
-    if (!containerRef.current) return { w: 1, h: 1 };
+    if (!containerRef.current) return { w: 800, h: 600 };
     const r = containerRef.current.getBoundingClientRect();
     return { w: r.width - 80, h: r.height - 30 };
   }, []);
 
+  // Calculate visible range based on container size and cell size
+  const { w: containerW, h: containerH } = getContainerSize();
+  const visibleCols = Math.ceil(containerW / cellSize) + 2;
+  const visibleRows = Math.ceil(containerH / cellSize) + 2;
+
+  // Base position (without pan) - current slot at left edge, current price centered
+  const basePriceLevel = initialPriceLevel || currentPriceLevel;
+
+  // Visible slots centered on displaySlot (graph left, bets right)
+  const halfCols = Math.floor(visibleCols / 2);
+  const visibleSlots = useMemo(() => {
+    const offsetSlots = Math.floor(panOffsetX / cellSize);
+    const startSlot = displaySlot - halfCols - offsetSlots - 1;
+    return Array.from({ length: visibleCols + 2 }, (_, i) => startSlot + i);
+  }, [displaySlot, halfCols, panOffsetX, cellSize, visibleCols]);
+
+  // Visible price levels (centered on base price, shifted by pan)
+  const visiblePriceLevels = useMemo(() => {
+    const offsetRows = Math.floor(panOffsetY / cellSize);
+    const centerPrice = basePriceLevel + offsetRows * PSTEP;
+    const halfRows = Math.floor(visibleRows / 2);
+    const levels = [];
+    for (let i = 0; i < visibleRows + 2; i++) {
+      levels.push(centerPrice + (halfRows - i + 1) * PSTEP);
+    }
+    return levels;
+  }, [basePriceLevel, panOffsetY, cellSize, visibleRows]);
+
+  // Convert slot to X position (in pixels) - centered, with direct pan offset
+  const centerX = containerW / 2;
+  const slotToX = useCallback((slotNum) => {
+    const baseX = (slotNum - displaySlot) * cellSize;
+    return centerX + baseX + panOffsetX;
+  }, [displaySlot, cellSize, panOffsetX, centerX]);
+
   // Convert tick to X position
   const toX = useCallback((targetTick) => {
-    const { w } = getContainerSize();
-    return ((targetTick - minVisibleTick) / totalVisTicks) * w;
-  }, [minVisibleTick, totalVisTicks, getContainerSize]);
+    const slotNum = targetTick / TICKS_COL;
+    const baseX = (slotNum - displaySlot) * cellSize;
+    return centerX + baseX + panOffsetX;
+  }, [displaySlot, cellSize, panOffsetX, centerX]);
 
-  const slotToX = useCallback((slotNum) => {
-    return toX(slotNum * TICKS_COL);
-  }, [toX]);
-
+  // Convert price to Y position (in pixels)
   const toY = useCallback((price) => {
-    const { h } = getContainerSize();
-    return h - ((price - minVisiblePrice) / (maxVisiblePrice - minVisiblePrice)) * h;
-  }, [minVisiblePrice, maxVisiblePrice, getContainerSize]);
+    const priceRows = (basePriceLevel - price) / PSTEP;
+    const centerY = containerH / 2;
+    return centerY + priceRows * cellSize + panOffsetY;
+  }, [basePriceLevel, cellSize, containerH, panOffsetY]);
 
-  const getSlotWidth = useCallback(() => {
-    const { w } = getContainerSize();
-    return (TICKS_COL / totalVisTicks) * w;
-  }, [totalVisTicks, getContainerSize]);
+  const getSlotWidth = useCallback(() => cellSize, [cellSize]);
+  const getRowHeight = useCallback(() => cellSize, [cellSize]);
 
-  const getRowHeight = useCallback(() => {
-    const { h } = getContainerSize();
-    return (PSTEP / (maxVisiblePrice - minVisiblePrice)) * h;
-  }, [maxVisiblePrice, minVisiblePrice, getContainerSize]);
+  // For canvas rendering
+  const minVisiblePrice = visiblePriceLevels[visiblePriceLevels.length - 1] - PSTEP;
+  const maxVisiblePrice = visiblePriceLevels[0] + PSTEP;
+  const minVisibleTick = visibleSlots[0] * TICKS_COL;
+  const maxVisibleTick = (visibleSlots[visibleSlots.length - 1] + 1) * TICKS_COL;
 
   // Mouse handlers for pan
   const handleMouseDown = useCallback((e) => {
@@ -208,27 +214,10 @@ export default function Spike() {
     const dy = e.clientY - lastMousePos.current.y;
     lastMousePos.current = { x: e.clientX, y: e.clientY };
 
-    const { w, h } = getContainerSize();
-
-    // Pan X (time) - moving mouse right shows earlier time (decrease slot)
-    const ticksPerPixel = totalVisTicks / w;
-    const slotDelta = (dx * ticksPerPixel) / TICKS_COL;
-
-    // Pan Y (price) - moving mouse down shows higher prices (increase price)
-    const pricePerPixel = (maxVisiblePrice - minVisiblePrice) / h;
-    const priceDelta = dy * pricePerPixel;
-
-    setViewCenterSlot(prev => {
-      const current = prev !== null ? prev : currentSlot + Math.floor(visibleCols / 2);
-      return current - slotDelta;
-    });
-
-    setViewCenterPrice(prev => {
-      const current = prev || currentPriceLevel;
-      const newPrice = current + priceDelta;
-      return snapPrice(newPrice);
-    });
-  }, [getContainerSize, totalVisTicks, maxVisiblePrice, minVisiblePrice, currentSlot, visibleCols, currentPriceLevel]);
+    // Direct pixel-based panning - much smoother!
+    setPanOffsetX(prev => prev + dx);
+    setPanOffsetY(prev => prev + dy);
+  }, []);
 
   const handleMouseUp = useCallback((e) => {
     isDragging.current = false;
@@ -244,19 +233,21 @@ export default function Spike() {
   const handleWheel = useCallback((e) => {
     e.preventDefault();
     const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-    setZoom(prev => Math.max(0.3, Math.min(3, prev * zoomFactor)));
+    setZoom(prev => Math.max(0.5, Math.min(2, prev * zoomFactor)));
   }, []);
 
-  // Reset view to follow current price/time
+  // Reset view to center on current price/time
   const resetView = useCallback(() => {
-    setViewCenterPrice(currentPriceLevel);
-    setViewCenterSlot(null); // Auto-follow current slot
+    setPanOffsetX(0);
+    setPanOffsetY(0);
     setZoom(1);
-  }, [currentPriceLevel]);
+  }, []);
 
   // Settle bets
   useEffect(() => {
     if (priceData.length === 0) return;
+    if (lastSettledTick.current === tick) return;
+    lastSettledTick.current = tick;
     const cp = currentPrice;
 
     setBets(prev => {
@@ -316,16 +307,12 @@ export default function Spike() {
     const H = rect.height - 30;
     ctx.clearRect(0, 0, rect.width, rect.height);
 
-    const _toX = (t) => ((t - minVisibleTick) / totalVisTicks) * W;
-    const _toY = (p) => H - ((p - minVisiblePrice) / (maxVisiblePrice - minVisiblePrice)) * H;
-
     // Row bands
     for (let i = 0; i < visiblePriceLevels.length; i++) {
       if (i % 2 === 0) {
-        const y1 = _toY(visiblePriceLevels[i] + PSTEP / 2);
-        const y2 = _toY(visiblePriceLevels[i] - PSTEP / 2);
+        const y = toY(visiblePriceLevels[i]);
         ctx.fillStyle = "rgba(180,60,120,0.015)";
-        ctx.fillRect(0, y1, W + 80, y2 - y1);
+        ctx.fillRect(0, y - cellSize / 2, W + 80, cellSize);
       }
     }
 
@@ -333,41 +320,49 @@ export default function Spike() {
     ctx.strokeStyle = "rgba(180,60,120,0.08)";
     ctx.lineWidth = 1;
     visiblePriceLevels.forEach(p => {
-      const y = _toY(p);
+      const y = toY(p);
       ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(W + 80, y);
+      ctx.moveTo(0, y - cellSize / 2);
+      ctx.lineTo(W + 80, y - cellSize / 2);
       ctx.stroke();
     });
 
     // Vertical grid lines at slot boundaries
-    visibleSlots.forEach((slotNum, i) => {
-      const x = _toX(slotNum * TICKS_COL);
+    visibleSlots.forEach((slotNum) => {
+      const x = slotToX(slotNum);
       const isCurrentSlot = slotNum === currentSlot;
       const isBettable = slotNum >= firstBettableSlot;
 
       ctx.beginPath();
-      ctx.strokeStyle = isCurrentSlot ? "rgba(233,30,140,0.4)" : isBettable ? "rgba(180,60,120,0.12)" : "rgba(180,60,120,0.05)";
-      ctx.lineWidth = isCurrentSlot ? 2 : 1;
+      if (isCurrentSlot) {
+        ctx.strokeStyle = "rgba(233,30,140,0.6)";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+      } else {
+        ctx.strokeStyle = isBettable ? "rgba(180,60,120,0.12)" : "rgba(180,60,120,0.05)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([]);
+      }
       ctx.moveTo(x, 0);
       ctx.lineTo(x, H);
       ctx.stroke();
+      ctx.setLineDash([]);
     });
 
     // Current price row highlight
-    const curY = _toY(currentPriceLevel);
-    if (curY >= 0 && curY <= H) {
+    const curY = toY(currentPriceLevel);
+    if (curY >= -cellSize && curY <= H + cellSize) {
       ctx.fillStyle = "rgba(233,30,140,0.06)";
-      ctx.fillRect(0, curY - getRowHeight() / 2, W + 80, getRowHeight());
+      ctx.fillRect(0, curY - cellSize / 2, W + 80, cellSize);
     }
 
     // Price line
-    const lineStartTick = Math.max(0, Math.floor(minVisibleTick) - 10);
+    const lineStartTick = Math.max(0, minVisibleTick - 10);
     const lineEndTick = Math.min(tick, priceData.length - 1);
 
     if (lineEndTick >= lineStartTick && priceData.length > lineStartTick) {
       const lineData = [];
-      for (let t = lineStartTick; t <= lineEndTick && t < priceData.length; t++) {
+      for (let t = Math.max(0, lineStartTick); t <= lineEndTick && t < priceData.length; t++) {
         lineData.push({ tick: t, price: priceData[t] });
       }
 
@@ -377,8 +372,8 @@ export default function Spike() {
         ctx.strokeStyle = "rgba(233,30,140,0.2)";
         ctx.lineWidth = 8;
         lineData.forEach((d, i) => {
-          const x = _toX(d.tick);
-          const y = _toY(d.price);
+          const x = toX(d.tick);
+          const y = toY(d.price);
           i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
         });
         ctx.stroke();
@@ -388,8 +383,8 @@ export default function Spike() {
         ctx.strokeStyle = "#E91E8C";
         ctx.lineWidth = 2.5;
         lineData.forEach((d, i) => {
-          const x = _toX(d.tick);
-          const y = _toY(d.price);
+          const x = toX(d.tick);
+          const y = toY(d.price);
           i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
         });
         ctx.stroke();
@@ -401,11 +396,11 @@ export default function Spike() {
           ctx.lineWidth = 1.8;
           ctx.setLineDash([5, 3]);
           let started = false;
-          for (let t = lineStartTick; t <= lineEndTick && t < smaData.length; t++) {
+          for (let t = Math.max(0, lineStartTick); t <= lineEndTick && t < smaData.length; t++) {
             const v = smaData[t];
             if (v === null) continue;
-            const x = _toX(t);
-            const y = _toY(v);
+            const x = toX(t);
+            const y = toY(v);
             if (!started) { ctx.moveTo(x, y); started = true; }
             else ctx.lineTo(x, y);
           }
@@ -414,8 +409,8 @@ export default function Spike() {
         }
 
         // Current price dot
-        const lastX = _toX(tick);
-        const lastY = _toY(currentPrice);
+        const lastX = toX(tick);
+        const lastY = toY(currentPrice);
         if (lastX >= -20 && lastX <= W + 20 && lastY >= -20 && lastY <= H + 20) {
           ctx.beginPath();
           ctx.arc(lastX, lastY, 12, 0, Math.PI * 2);
@@ -431,7 +426,7 @@ export default function Spike() {
         }
       }
     }
-  }, [tick, visiblePriceLevels, visibleSlots, currentPrice, currentPriceLevel, showSMA, minVisiblePrice, maxVisiblePrice, minVisibleTick, totalVisTicks, priceData, smaData, currentSlot, firstBettableSlot, getRowHeight]);
+  }, [tick, visiblePriceLevels, visibleSlots, currentPrice, currentPriceLevel, showSMA, minVisibleTick, priceData, smaData, currentSlot, firstBettableSlot, cellSize, toX, toY, slotToX]);
 
   // Place bet
   const placeBet = useCallback((slotNum, priceLevel) => {
@@ -458,13 +453,12 @@ export default function Spike() {
     return bets.find(b => b.status === "active" && b.slotNum === slotNum && b.priceLevel === priceLevel);
   }, [bets]);
 
-  // Visible bets
+  // Visible bets - filter based on visible slots and price levels
   const visibleBets = bets.filter(b => {
     if (b.status === "won") return false;
-    const slotMidTick = b.slotNum * TICKS_COL + TICKS_COL / 2;
-    const isXVisible = slotMidTick >= minVisibleTick && slotMidTick <= maxVisibleTick;
-    const isYVisible = b.priceLevel >= minVisiblePrice && b.priceLevel <= maxVisiblePrice;
-    return isXVisible && isYVisible;
+    const isSlotVisible = visibleSlots.includes(b.slotNum);
+    const isPriceVisible = visiblePriceLevels.includes(b.priceLevel);
+    return isSlotVisible && isPriceVisible;
   });
 
   const activeBetCount = bets.filter(b => b.status === "active").length;
@@ -472,7 +466,7 @@ export default function Spike() {
   const lostCount = bets.filter(b => b.status === "lost").length;
 
   const resetGame = () => {
-    setBalance(1000);
+    setBalance(200);
     setBets([]);
     setToasts([]);
     setFloats([]);
@@ -572,20 +566,17 @@ export default function Spike() {
 
         {/* Bet chips */}
         {visibleBets.map(bet => {
-          const slotMidTick = bet.slotNum * TICKS_COL + TICKS_COL / 2;
-          const x = toX(slotMidTick);
+          const x = slotToX(bet.slotNum);
           const y = toY(bet.priceLevel);
-          const cellW = getSlotWidth();
-          const cellH = getRowHeight();
           const isLost = bet.status === "lost";
 
           return (
             <div key={bet.id} style={{
               position: "absolute",
-              left: x - cellW / 2,
-              top: y - cellH / 2,
-              width: cellW,
-              height: cellH,
+              left: x,
+              top: y - cellSize / 2,
+              width: cellSize,
+              height: cellSize,
               zIndex: 15,
               display: "flex", flexDirection: "column",
               alignItems: "center", justifyContent: "center",
@@ -608,7 +599,8 @@ export default function Spike() {
 
         {/* Explosions */}
         {explosions.map(e => {
-          const x = toX(e.targetTick);
+          const slotNum = Math.floor(e.targetTick / TICKS_COL);
+          const x = slotToX(slotNum) + cellSize / 2;
           const y = toY(e.priceLevel);
           return (
             <div key={e.id} style={{
@@ -622,7 +614,8 @@ export default function Spike() {
 
         {/* Floats */}
         {floats.map(f => {
-          const x = toX(f.targetTick);
+          const slotNum = Math.floor(f.targetTick / TICKS_COL);
+          const x = slotToX(slotNum) + cellSize / 2;
           const y = toY(f.priceLevel);
           return (
             <div key={f.id} style={{
@@ -636,16 +629,13 @@ export default function Spike() {
         })}
 
         {/* Clickable grid cells */}
-        {visibleSlots.map((slotNum, colIdx) => {
+        {visibleSlots.map((slotNum) => {
           const slotX = slotToX(slotNum);
-          const cellW = getSlotWidth();
           const isBettable = slotNum >= firstBettableSlot;
 
           return visiblePriceLevels.map((priceLevel) => {
             const y = toY(priceLevel);
-            const cellH = getRowHeight();
             const hasBet = getBetAtCell(slotNum, priceLevel);
-            const isCurrentRow = priceLevel === currentPriceLevel;
             const distFromCenter = (currentPriceLevel - priceLevel) / PSTEP;
             const mult = calcMult(distFromCenter, Math.max(0, slotNum - currentSlot));
 
@@ -656,26 +646,25 @@ export default function Spike() {
                 style={{
                   position: "absolute",
                   left: slotX,
-                  top: y - cellH / 2,
-                  width: cellW,
-                  height: cellH,
+                  top: y - cellSize / 2,
+                  width: cellSize,
+                  height: cellSize,
                   zIndex: 20,
                   display: "flex", alignItems: "center", justifyContent: "center",
                   cursor: hasBet || !isBettable ? "grab" : "pointer",
-                  borderRight: "1px solid rgba(180,60,120,0.1)",
-                  borderBottom: "1px solid rgba(180,60,120,0.1)",
-                  background: !isBettable ? "rgba(0,0,0,0.3)" : isCurrentRow ? "rgba(233,30,140,0.04)" : "transparent",
-                  opacity: isBettable ? 1 : 0.5,
+                  background: "transparent",
+                  opacity: isBettable ? 1 : 0.3,
+                  transition: "background 0.15s ease",
                 }}
-                onMouseEnter={e => { if (!hasBet && isBettable && !isDragging.current) e.currentTarget.style.background = "rgba(232,245,74,0.1)"; }}
-                onMouseLeave={e => { if (!hasBet && isBettable) e.currentTarget.style.background = isCurrentRow ? "rgba(233,30,140,0.04)" : "transparent"; }}
+                onMouseEnter={e => { if (!hasBet && isBettable && !isDragging.current) e.currentTarget.style.background = "rgba(232,245,74,0.08)"; }}
+                onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
               >
                 {!hasBet && isBettable && (
                   <span style={{
-                    fontSize: 10,
-                    color: mult > 12 ? "rgba(233,30,140,0.6)" : mult > 6 ? "rgba(233,30,140,0.4)" : "rgba(233,30,140,0.25)",
-                    fontWeight: 600,
-                  }}>{mult.toFixed(1)}X</span>
+                    fontSize: 9,
+                    color: "rgba(255,255,255,0.15)",
+                    fontWeight: 500,
+                  }}>{mult.toFixed(1)}x</span>
                 )}
               </div>
             );
@@ -683,13 +672,23 @@ export default function Spike() {
         })}
 
         {/* Y-axis */}
-        <div style={{ position: "absolute", right: 0, top: 0, bottom: 30, width: 75, zIndex: 30, display: "flex", flexDirection: "column", justifyContent: "space-around", pointerEvents: "none" }}>
+        <div style={{ position: "absolute", right: 0, top: 0, bottom: 30, width: 75, zIndex: 30, pointerEvents: "none" }}>
           {visiblePriceLevels.map((p) => {
+            const y = toY(p);
             const isCurrent = p === currentPriceLevel;
             return (
-              <div key={p} style={{ fontSize: 10, textAlign: "right", paddingRight: 8, fontWeight: isCurrent ? 800 : 500, color: isCurrent ? "#E91E8C" : "rgba(233,30,140,0.35)", position: "relative" }}>
+              <div key={p} style={{
+                position: "absolute",
+                right: 8,
+                top: y,
+                transform: "translateY(-50%)",
+                fontSize: 10,
+                textAlign: "right",
+                fontWeight: isCurrent ? 800 : 500,
+                color: isCurrent ? "#E91E8C" : "rgba(233,30,140,0.35)",
+              }}>
                 {isCurrent ? (
-                  <div style={{ position: "absolute", right: 4, top: "50%", transform: "translateY(-50%)", background: "#E91E8C", borderRadius: 6, padding: "3px 10px", fontSize: 11, fontWeight: 800, color: "#fff", boxShadow: "0 0 16px rgba(233,30,140,0.5)" }}>${p.toFixed(0)}</div>
+                  <div style={{ background: "#E91E8C", borderRadius: 6, padding: "3px 10px", fontSize: 11, fontWeight: 800, color: "#fff", boxShadow: "0 0 16px rgba(233,30,140,0.5)" }}>${p.toFixed(0)}</div>
                 ) : `$${p.toFixed(0)}`}
               </div>
             );
@@ -697,9 +696,9 @@ export default function Spike() {
         </div>
 
         {/* X-axis */}
-        <div style={{ position: "absolute", left: 0, right: 80, bottom: 0, height: 28, zIndex: 30, display: "flex", alignItems: "center", pointerEvents: "none" }}>
+        <div style={{ position: "absolute", left: 0, right: 80, bottom: 0, height: 28, zIndex: 30, pointerEvents: "none" }}>
           {visibleSlots.map((slotNum) => {
-            const x = slotToX(slotNum) + getSlotWidth() / 2;
+            const x = slotToX(slotNum) + cellSize / 2;
             const isBettable = slotNum >= firstBettableSlot;
             const isCurrent = slotNum === currentSlot;
             return (
