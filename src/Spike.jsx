@@ -1,19 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
-function generatePriceData(basePrice, numPoints, volatility) {
-  const prices = [basePrice];
-  let price = basePrice;
-  for (let i = 1; i < numPoints; i++) {
-    const drift = (Math.random() - 0.502) * volatility;
-    const jump = Math.random() < 0.03 ? (Math.random() - 0.5) * volatility * 4 : 0;
-    price += drift + jump;
-    price = Math.max(basePrice - 8, Math.min(basePrice + 8, price));
-    prices.push(Math.round(price * 100) / 100);
-  }
-  return prices;
-}
-
 function computeSMA(data, w) {
+  if (data.length < w) return data.map(() => null);
   const sma = [];
   for (let i = 0; i < data.length; i++) {
     if (i < w - 1) { sma.push(null); continue; }
@@ -24,16 +12,14 @@ function computeSMA(data, w) {
   return sma;
 }
 
-const BASE = 2993.0;
-const PRICE_DATA = generatePriceData(BASE, 1500, 0.7);
-const SMA_DATA = computeSMA(PRICE_DATA, 12);
-const TICK_MS = 120;
+const TICK_MS = 500; // Aggregate trades every 500ms
 const GRID_COLS = 7;
 const GRID_ROWS = 13;
 const PSTEP = 0.5;
 const TICKS_COL = 15;
 const HIST_TICKS = 80;
 const BET_SIZES = [1, 5, 10, 50];
+const SMA_WINDOW = 12;
 
 function calcMult(distFromCenter, col) {
   const d = Math.abs(distFromCenter);
@@ -43,7 +29,9 @@ function calcMult(distFromCenter, col) {
 }
 
 export default function Spike() {
-  const [tick, setTick] = useState(HIST_TICKS);
+  const [priceData, setPriceData] = useState([]);
+  const [smaData, setSmaData] = useState([]);
+  const [tick, setTick] = useState(0);
   const [bets, setBets] = useState([]);
   const [balance, setBalance] = useState(1000);
   const [betSize, setBetSize] = useState(5);
@@ -51,12 +39,78 @@ export default function Spike() {
   const [floats, setFloats] = useState([]);
   const [running, setRunning] = useState(true);
   const [showSMA, setShowSMA] = useState(true);
+  const [connectionStatus, setConnectionStatus] = useState("connecting");
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const toastId = useRef(0);
   const floatId = useRef(0);
+  const wsRef = useRef(null);
+  const tradeBufferRef = useRef([]);
+  const lastTickTimeRef = useRef(Date.now());
 
-  const currentPrice = PRICE_DATA[tick] || BASE;
+  // WebSocket connection and data aggregation
+  useEffect(() => {
+    const ws = new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      console.log("Connected to Binance WebSocket");
+      setConnectionStatus("connected");
+    };
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      const price = parseFloat(data.p);
+      tradeBufferRef.current.push(price);
+    };
+
+    ws.onerror = (error) => {
+      console.error("WebSocket error:", error);
+      setConnectionStatus("error");
+    };
+
+    ws.onclose = () => {
+      console.log("WebSocket disconnected");
+      setConnectionStatus("disconnected");
+    };
+
+    // Aggregate trades into ticks every TICK_MS
+    const tickInterval = setInterval(() => {
+      if (tradeBufferRef.current.length > 0 && running) {
+        // Calculate average price from trades in this tick
+        const avgPrice = tradeBufferRef.current.reduce((a, b) => a + b, 0) / tradeBufferRef.current.length;
+        const roundedPrice = Math.round(avgPrice * 100) / 100;
+        
+        setPriceData(prev => {
+          const newData = [...prev, roundedPrice];
+          // Keep last 1000 ticks
+          if (newData.length > 1000) newData.shift();
+          
+          // Recalculate SMA
+          const newSma = computeSMA(newData, SMA_WINDOW);
+          setSmaData(newSma);
+          
+          return newData;
+        });
+        
+        setTick(prev => prev + 1);
+        tradeBufferRef.current = [];
+      }
+    }, TICK_MS);
+
+    return () => {
+      clearInterval(tickInterval);
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
+    };
+  }, [running]);
+
+  const currentPrice = priceData[priceData.length - 1] || 0;
+  
+  // Wait for minimum data before showing game
+  const isReady = priceData.length >= HIST_TICKS && currentPrice > 0;
+  
   const gridCenter = useMemo(() => Math.round(currentPrice * 2) / 2, [Math.round(currentPrice * 2)]);
   const priceRows = useMemo(() => {
     const rows = [];
@@ -87,17 +141,10 @@ export default function Spike() {
     return h - ((p - minP) / (maxP - minP)) * h;
   }, [minP, maxP, getContainerSize]);
 
-  // Advance
-  useEffect(() => {
-    if (!running) return;
-    const t = setInterval(() => setTick(p => p >= PRICE_DATA.length - GRID_COLS * TICKS_COL - 10 ? p : p + 1), TICK_MS);
-    return () => clearInterval(t);
-  }, [running]);
-
   // Settle bets — INSTANT win when line touches the row, miss only after full column passes
   useEffect(() => {
-    const cp = PRICE_DATA[tick];
-    if (cp === undefined) return;
+    if (priceData.length === 0) return;
+    const cp = currentPrice;
 
     setBets(prev => {
       let totalWin = 0;
@@ -143,7 +190,7 @@ export default function Spike() {
   // Draw canvas
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || priceData.length === 0) return;
     const rect = canvas.parentElement.getBoundingClientRect();
     canvas.width = rect.width * 2;
     canvas.height = rect.height * 2;
@@ -173,17 +220,22 @@ export default function Spike() {
     ctx.fillStyle = "rgba(233,30,140,0.04)";
     ctx.fillRect(0, _toY(currentPrice + PSTEP / 2), W, _toY(currentPrice - PSTEP / 2) - _toY(currentPrice + PSTEP / 2));
 
-    // Ghost
+    // Ghost (historical tail)
     const gs = Math.max(0, startTick - 30);
-    if (gs < Math.max(0, startTick)) {
-      ctx.beginPath(); ctx.strokeStyle = "rgba(233,30,140,0.1)"; ctx.lineWidth = 1.5;
-      PRICE_DATA.slice(gs, Math.max(0, startTick) + 1).forEach((p, i) => { const x = _toX(gs + i), y = _toY(p); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
-      ctx.stroke();
+    const ghostEnd = Math.max(0, startTick);
+    if (gs < ghostEnd && gs < priceData.length) {
+      const ghostData = priceData.slice(gs, Math.min(ghostEnd + 1, priceData.length));
+      if (ghostData.length > 0) {
+        ctx.beginPath(); ctx.strokeStyle = "rgba(233,30,140,0.1)"; ctx.lineWidth = 1.5;
+        ghostData.forEach((p, i) => { const x = _toX(gs + i), y = _toY(p); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
+        ctx.stroke();
+      }
     }
 
     // Main line
     const ls = Math.max(0, startTick);
-    const sl = PRICE_DATA.slice(ls, tick + 1);
+    const lineEnd = Math.min(tick, priceData.length - 1);
+    const sl = priceData.slice(ls, lineEnd + 1);
     if (sl.length > 1) {
       ctx.beginPath(); ctx.strokeStyle = "rgba(233,30,140,0.18)"; ctx.lineWidth = 8;
       sl.forEach((p, i) => { const x = _toX(ls + i), y = _toY(p); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
@@ -192,19 +244,20 @@ export default function Spike() {
       sl.forEach((p, i) => { const x = _toX(ls + i), y = _toY(p); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
       ctx.stroke();
 
-      if (showSMA) {
-        const smaS = SMA_DATA.slice(ls, tick + 1);
+      if (showSMA && smaData.length > 0) {
+        const smaS = smaData.slice(ls, lineEnd + 1);
         ctx.beginPath(); ctx.strokeStyle = "rgba(100,200,255,0.45)"; ctx.lineWidth = 1.8; ctx.setLineDash([5, 3]);
         let st = false;
         smaS.forEach((v, i) => { if (v === null) return; const x = _toX(ls + i), y = _toY(v); if (!st) { ctx.moveTo(x, y); st = true; } else ctx.lineTo(x, y); });
         ctx.stroke(); ctx.setLineDash([]);
       }
 
-      const lx = _toX(tick), ly = _toY(PRICE_DATA[tick]);
+      const currentIdx = Math.min(tick, priceData.length - 1);
+      const lx = _toX(currentIdx), ly = _toY(priceData[currentIdx]);
       ctx.beginPath(); ctx.arc(lx, ly, 10, 0, Math.PI * 2); ctx.fillStyle = "rgba(233,30,140,0.06)"; ctx.fill();
       ctx.beginPath(); ctx.arc(lx, ly, 5, 0, Math.PI * 2); ctx.fillStyle = "#fff"; ctx.shadowColor = "#E91E8C"; ctx.shadowBlur = 16; ctx.fill(); ctx.shadowBlur = 0;
     }
-  }, [tick, priceRows, currentPrice, showSMA, startTick, minP, maxP, totalVisTicks]);
+  }, [tick, priceRows, currentPrice, showSMA, startTick, minP, maxP, totalVisTicks, priceData, smaData]);
 
   const placeBet = useCallback((rowIdx, colIdx) => {
     if (balance < betSize) return;
@@ -239,8 +292,11 @@ export default function Spike() {
   const lostCount = bets.filter(b => b.status === "missed").length;
 
   const resetGame = () => {
-    setBalance(1000); setBets([]); setTick(HIST_TICKS);
-    setToasts([]); setFloats([]); setRunning(true);
+    setBalance(1000); 
+    setBets([]); 
+    setToasts([]); 
+    setFloats([]); 
+    // Don't reset tick or priceData - keep real-time data flowing
   };
 
   const gridLeftPct = (HIST_TICKS / totalVisTicks) * 100;
@@ -254,6 +310,22 @@ export default function Spike() {
       <div style={{ position: "fixed", inset: 0, opacity: 0.025, zIndex: 0, pointerEvents: "none",
         backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
       }} />
+
+      {/* Loading Screen */}
+      {!isReady && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", background: "#0D0815" }}>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 48, marginBottom: 24, animation: "blink 1.5s ease-in-out infinite" }}>📊</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "#E91E8C", marginBottom: 8, letterSpacing: 3 }}>SPIKE</div>
+            <div style={{ fontSize: 13, color: "rgba(255,255,255,0.4)", marginBottom: 16 }}>
+              {connectionStatus === "connected" ? "Loading market data..." : connectionStatus === "connecting" ? "Connecting to Binance..." : "Connection failed"}
+            </div>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.25)" }}>
+              {priceData.length}/{HIST_TICKS} ticks
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Toasts */}
       <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 200, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -272,10 +344,23 @@ export default function Spike() {
 
       {/* Header */}
       <div style={{ position: "relative", zIndex: 50, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px" }}>
-        <div style={{ background: "rgba(233,30,140,0.12)", border: "1px solid rgba(233,30,140,0.35)", borderRadius: 24, padding: "6px 16px", display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#E91E8C", boxShadow: "0 0 8px #E91E8C", animation: "blink 2s ease-in-out infinite" }} />
-          <span style={{ color: "#E91E8C", fontWeight: 800, fontSize: 16, letterSpacing: -0.5 }}>${currentPrice.toFixed(2)}</span>
-          <span style={{ fontSize: 10, color: "rgba(233,30,140,0.5)", fontWeight: 600 }}>BTC/USD</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ background: "rgba(233,30,140,0.12)", border: "1px solid rgba(233,30,140,0.35)", borderRadius: 24, padding: "6px 16px", display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#E91E8C", boxShadow: "0 0 8px #E91E8C", animation: "blink 2s ease-in-out infinite" }} />
+            <span style={{ color: "#E91E8C", fontWeight: 800, fontSize: 16, letterSpacing: -0.5 }}>${currentPrice.toFixed(2)}</span>
+            <span style={{ fontSize: 10, color: "rgba(233,30,140,0.5)", fontWeight: 600 }}>BTC/USD</span>
+          </div>
+          <div style={{ 
+            fontSize: 9, 
+            fontWeight: 600, 
+            color: connectionStatus === "connected" ? "#4AE86A" : connectionStatus === "connecting" ? "#E8F54A" : "#ff6b6b",
+            background: connectionStatus === "connected" ? "rgba(74,232,106,0.1)" : connectionStatus === "connecting" ? "rgba(232,245,74,0.1)" : "rgba(255,107,107,0.1)",
+            padding: "4px 8px",
+            borderRadius: 8,
+            border: `1px solid ${connectionStatus === "connected" ? "rgba(74,232,106,0.3)" : connectionStatus === "connecting" ? "rgba(232,245,74,0.3)" : "rgba(255,107,107,0.3)"}`
+          }}>
+            {connectionStatus === "connected" ? "● LIVE" : connectionStatus === "connecting" ? "○ CONNECTING..." : "✕ DISCONNECTED"}
+          </div>
         </div>
         <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: 3, color: "rgba(255,255,255,0.12)", textTransform: "uppercase" }}>Spike</div>
         <div style={{ display: "flex", gap: 6 }}>
