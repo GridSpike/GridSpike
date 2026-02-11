@@ -4,16 +4,7 @@ export declare class TransactionsController {
     constructor(transactionsService: TransactionsService);
     getHistory(user: {
         id: string;
-    }, limit?: string): Promise<{
-        amount: number;
-        balanceBefore: number;
-        balanceAfter: number;
-        id: string;
-        createdAt: Date;
-        userId: string;
-        type: string;
-        betId: string | null;
-    }[]>;
+    }, limit?: string): Promise<any[]>;
     getSummary(user: {
         id: string;
     }): Promise<{

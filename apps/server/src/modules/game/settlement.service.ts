@@ -1,4 +1,5 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 import { PriceService, PriceData } from '../price/price.service';
 
@@ -92,7 +93,7 @@ export class SettlementService implements OnModuleInit {
     settlePrice: number,
   ) {
     try {
-      const result = await this.prisma.$transaction(async (tx) => {
+      const result = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         // Get the bet
         const bet = await tx.bet.findUnique({
           where: { id: betId },

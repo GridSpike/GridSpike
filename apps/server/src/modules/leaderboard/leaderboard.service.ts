@@ -21,18 +21,18 @@ export class LeaderboardService {
       },
     });
 
-    const leaderboard = users.map((user) => {
+    const leaderboard = users.map((user: any) => {
       const totalBet = user.bets.reduce(
-        (sum, bet) => sum + Number(bet.amount),
+        (sum: number, bet: any) => sum + Number(bet.amount),
         0,
       );
       const totalPayout = user.bets.reduce(
-        (sum, bet) => sum + (bet.payout ? Number(bet.payout) : 0),
+        (sum: number, bet: any) => sum + (bet.payout ? Number(bet.payout) : 0),
         0,
       );
       const profit = totalPayout - totalBet;
-      const wins = user.bets.filter((b) => b.status === 'WON').length;
-      const losses = user.bets.filter((b) => b.status === 'LOST').length;
+      const wins = user.bets.filter((b: any) => b.status === 'WON').length;
+      const losses = user.bets.filter((b: any) => b.status === 'LOST').length;
 
       return {
         userId: user.id,
@@ -45,9 +45,9 @@ export class LeaderboardService {
     });
 
     return leaderboard
-      .sort((a, b) => b.profit - a.profit)
+      .sort((a: any, b: any) => b.profit - a.profit)
       .slice(0, limit)
-      .map((entry, index) => ({ ...entry, rank: index + 1 }));
+      .map((entry: any, index: number) => ({ ...entry, rank: index + 1 }));
   }
 
   async getTopByWins(limit = 10) {
@@ -63,13 +63,13 @@ export class LeaderboardService {
     });
 
     return users
-      .map((user) => ({
+      .map((user: any) => ({
         userId: user.id,
         username: user.username,
         wins: user.bets.length,
       }))
-      .sort((a, b) => b.wins - a.wins)
+      .sort((a: any, b: any) => b.wins - a.wins)
       .slice(0, limit)
-      .map((entry, index) => ({ ...entry, rank: index + 1 }));
+      .map((entry: any, index: number) => ({ ...entry, rank: index + 1 }));
   }
 }

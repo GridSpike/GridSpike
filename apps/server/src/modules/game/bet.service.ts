@@ -1,4 +1,5 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 import { PriceService } from '../price/price.service';
 
@@ -61,7 +62,7 @@ export class BetService {
     const targetTick = currentPrice.tick + (dto.gridCol + 1) * TICKS_COL;
 
     // Use transaction to ensure atomicity
-    return this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // Get user and check balance
       const user = await tx.user.findUnique({
         where: { id: userId },
@@ -131,7 +132,7 @@ export class BetService {
       orderBy: { placedAt: 'desc' },
     });
 
-    return bets.map((bet) => ({
+    return bets.map((bet: any) => ({
       ...bet,
       amount: Number(bet.amount),
       multiplier: Number(bet.multiplier),
@@ -151,7 +152,7 @@ export class BetService {
       take: limit,
     });
 
-    return bets.map((bet) => ({
+    return bets.map((bet: any) => ({
       ...bet,
       amount: Number(bet.amount),
       multiplier: Number(bet.multiplier),

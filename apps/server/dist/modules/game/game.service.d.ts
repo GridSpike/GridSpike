@@ -23,37 +23,7 @@ export declare class GameService {
         };
         newBalance: number;
     }>;
-    getActiveBets(userId: string): Promise<{
-        amount: number;
-        multiplier: number;
-        priceLevel: number;
-        payout: number | null;
-        priceAtPlacement: number;
-        priceAtSettlement: number | null;
-        id: string;
-        targetTick: number;
-        gridRow: number;
-        gridCol: number;
-        status: import("@prisma/client").$Enums.BetStatus;
-        placedAt: Date;
-        settledAt: Date | null;
-        userId: string;
-    }[]>;
-    getBetHistory(userId: string, limit?: number): Promise<{
-        amount: number;
-        multiplier: number;
-        priceLevel: number;
-        payout: number | null;
-        priceAtPlacement: number;
-        priceAtSettlement: number | null;
-        id: string;
-        targetTick: number;
-        gridRow: number;
-        gridCol: number;
-        status: import("@prisma/client").$Enums.BetStatus;
-        placedAt: Date;
-        settledAt: Date | null;
-        userId: string;
-    }[]>;
+    getActiveBets(userId: string): Promise<any[]>;
+    getBetHistory(userId: string, limit?: number): Promise<any[]>;
     onSettlement(callback: Parameters<SettlementService['onSettlement']>[0]): () => void;
 }

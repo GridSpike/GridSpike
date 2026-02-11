@@ -49,22 +49,7 @@ export declare class GameGateway implements OnGatewayInit, OnGatewayConnection, 
         bets?: undefined;
     } | {
         success: boolean;
-        bets: {
-            amount: number;
-            multiplier: number;
-            priceLevel: number;
-            payout: number | null;
-            priceAtPlacement: number;
-            priceAtSettlement: number | null;
-            id: string;
-            targetTick: number;
-            gridRow: number;
-            gridCol: number;
-            status: import("@prisma/client").$Enums.BetStatus;
-            placedAt: Date;
-            settledAt: Date | null;
-            userId: string;
-        }[];
+        bets: any[];
         error?: undefined;
     }>;
     private notifySettlement;
