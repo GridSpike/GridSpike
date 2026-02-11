@@ -17,7 +17,7 @@ const GRID_COLS = 7;
 const GRID_ROWS = 13;
 const PSTEP = 0.5;
 const TICKS_COL = 15;
-const HIST_TICKS = 80;
+const HIST_TICKS = 10;
 const BET_SIZES = [1, 5, 10, 50];
 const SMA_WINDOW = 12;
 
@@ -40,6 +40,11 @@ export default function Spike() {
   const [running, setRunning] = useState(true);
   const [showSMA, setShowSMA] = useState(true);
   const [connectionStatus, setConnectionStatus] = useState("connecting");
+  const [zoom, setZoom] = useState(1);
+  const [panX, setPanX] = useState(0);
+  const [panY, setPanY] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const toastId = useRef(0);
@@ -50,7 +55,7 @@ export default function Spike() {
 
   // WebSocket connection and data aggregation
   useEffect(() => {
-    const ws = new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");
+    const ws = new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@miniTicker");
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -60,8 +65,10 @@ export default function Spike() {
 
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
-      const price = parseFloat(data.p);
-      tradeBufferRef.current.push(price);
+      const price = parseFloat(data.c); // miniTicker uses 'c' for close price
+      if (!isNaN(price)) {
+        tradeBufferRef.current.push(price);
+      }
     };
 
     ws.onerror = (error) => {
@@ -133,13 +140,13 @@ export default function Spike() {
 
   const toX = useCallback((t) => {
     const { w } = getContainerSize();
-    return ((t - startTick) / totalVisTicks) * w;
-  }, [startTick, totalVisTicks, getContainerSize]);
+    return (((t - startTick) / totalVisTicks) * w * zoom) + panX;
+  }, [startTick, totalVisTicks, getContainerSize, zoom, panX]);
 
   const toY = useCallback((p) => {
     const { h } = getContainerSize();
-    return h - ((p - minP) / (maxP - minP)) * h;
-  }, [minP, maxP, getContainerSize]);
+    return (h - ((p - minP) / (maxP - minP)) * h * zoom) + panY;
+  }, [minP, maxP, getContainerSize, zoom, panY]);
 
   // Settle bets — INSTANT win when line touches the row, miss only after full column passes
   useEffect(() => {
@@ -187,6 +194,28 @@ export default function Spike() {
     });
   }, [tick]);
 
+  // Mouse interactions
+  const handleWheel = useCallback((e) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    setZoom(prev => Math.max(0.5, Math.min(5, prev * delta)));
+  }, []);
+
+  const handleMouseDown = useCallback((e) => {
+    setIsDragging(true);
+    setDragStart({ x: e.clientX - panX, y: e.clientY - panY });
+  }, [panX, panY]);
+
+  const handleMouseMove = useCallback((e) => {
+    if (!isDragging) return;
+    setPanX(e.clientX - dragStart.x);
+    setPanY(e.clientY - dragStart.y);
+  }, [isDragging, dragStart]);
+
+  const handleMouseUp = useCallback(() => {
+    setIsDragging(false);
+  }, []);
+
   // Draw canvas
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -199,8 +228,12 @@ export default function Spike() {
     const W = rect.width, H = rect.height;
     ctx.clearRect(0, 0, W, H);
 
-    const _toX = (t) => ((t - startTick) / totalVisTicks) * W;
-    const _toY = (p) => H - ((p - minP) / (maxP - minP)) * H;
+    const AXIS_MARGIN = 60;
+    const chartWidth = W - AXIS_MARGIN;
+    const chartHeight = H - AXIS_MARGIN;
+
+    const _toX = (t) => (((t - startTick) / totalVisTicks) * chartWidth * zoom) + panX;
+    const _toY = (p) => (chartHeight - ((p - minP) / (maxP - minP)) * chartHeight * zoom) + panY;
 
     // Row bands
     for (let i = 0; i < priceRows.length; i++) {
@@ -257,7 +290,63 @@ export default function Spike() {
       ctx.beginPath(); ctx.arc(lx, ly, 10, 0, Math.PI * 2); ctx.fillStyle = "rgba(233,30,140,0.06)"; ctx.fill();
       ctx.beginPath(); ctx.arc(lx, ly, 5, 0, Math.PI * 2); ctx.fillStyle = "#fff"; ctx.shadowColor = "#E91E8C"; ctx.shadowBlur = 16; ctx.fill(); ctx.shadowBlur = 0;
     }
-  }, [tick, priceRows, currentPrice, showSMA, startTick, minP, maxP, totalVisTicks, priceData, smaData]);
+
+    // Draw Y-axis (price)
+    ctx.strokeStyle = "rgba(255,255,255,0.15)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(chartWidth, 0);
+    ctx.lineTo(chartWidth, chartHeight);
+    ctx.stroke();
+
+    // Y-axis labels
+    ctx.fillStyle = "rgba(255,255,255,0.6)";
+    ctx.font = "10px 'JetBrains Mono', monospace";
+    ctx.textAlign = "left";
+    const priceStep = (maxP - minP) / 8;
+    for (let i = 0; i <= 8; i++) {
+      const price = minP + (priceStep * i);
+      const y = _toY(price);
+      if (y >= 0 && y <= chartHeight) {
+        ctx.beginPath();
+        ctx.moveTo(chartWidth, y);
+        ctx.lineTo(chartWidth + 5, y);
+        ctx.stroke();
+        ctx.fillText(`$${price.toFixed(1)}`, chartWidth + 8, y + 3);
+      }
+    }
+
+    // Draw X-axis (time)
+    ctx.beginPath();
+    ctx.moveTo(0, chartHeight);
+    ctx.lineTo(chartWidth, chartHeight);
+    ctx.stroke();
+
+    // X-axis labels (relative time)
+    ctx.textAlign = "center";
+    const timeStep = totalVisTicks / 6;
+    for (let i = 0; i <= 6; i++) {
+      const tickVal = startTick + (timeStep * i);
+      const x = _toX(tickVal);
+      if (x >= 0 && x <= chartWidth) {
+        ctx.beginPath();
+        ctx.moveTo(x, chartHeight);
+        ctx.lineTo(x, chartHeight + 5);
+        ctx.stroke();
+        const seconds = Math.round((tickVal - startTick) * TICK_MS / 1000);
+        ctx.fillText(`${seconds}s`, x, chartHeight + 18);
+      }
+    }
+
+    // Zoom indicator
+    if (zoom !== 1) {
+      ctx.fillStyle = "rgba(232,245,74,0.8)";
+      ctx.font = "11px 'JetBrains Mono', monospace";
+      ctx.textAlign = "right";
+      ctx.fillText(`${zoom.toFixed(1)}x`, W - 10, 20);
+    }
+
+  }, [tick, priceRows, currentPrice, showSMA, startTick, minP, maxP, totalVisTicks, priceData, smaData, zoom, panX, panY]);
 
   const placeBet = useCallback((rowIdx, colIdx) => {
     if (balance < betSize) return;
@@ -365,6 +454,7 @@ export default function Spike() {
         <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: 3, color: "rgba(255,255,255,0.12)", textTransform: "uppercase" }}>Spike</div>
         <div style={{ display: "flex", gap: 6 }}>
           <button onClick={() => setShowSMA(!showSMA)} style={{ background: showSMA ? "rgba(100,200,255,0.12)" : "rgba(255,255,255,0.06)", border: `1px solid ${showSMA ? "rgba(100,200,255,0.3)" : "rgba(255,255,255,0.12)"}`, borderRadius: 10, padding: "6px 10px", color: showSMA ? "rgba(100,200,255,0.8)" : "rgba(255,255,255,0.3)", cursor: "pointer", fontSize: 10, fontWeight: 700, fontFamily: "inherit" }}>SMA</button>
+          <button onClick={() => { setZoom(1); setPanX(0); setPanY(0); }} style={{ background: (zoom !== 1 || panX !== 0 || panY !== 0) ? "rgba(232,245,74,0.12)" : "rgba(255,255,255,0.06)", border: `1px solid ${(zoom !== 1 || panX !== 0 || panY !== 0) ? "rgba(232,245,74,0.3)" : "rgba(255,255,255,0.12)"}`, borderRadius: 10, padding: "6px 10px", color: (zoom !== 1 || panX !== 0 || panY !== 0) ? "rgba(232,245,74,0.8)" : "rgba(255,255,255,0.3)", cursor: "pointer", fontSize: 10, fontWeight: 700, fontFamily: "inherit" }}>🔍</button>
           <button onClick={() => setRunning(!running)} style={{ background: running ? "rgba(233,30,140,0.12)" : "rgba(74,232,106,0.15)", border: `1px solid ${running ? "rgba(233,30,140,0.3)" : "rgba(74,232,106,0.3)"}`, borderRadius: 10, padding: "6px 14px", color: running ? "#E91E8C" : "#4AE86A", cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>{running ? "⏸" : "▶"}</button>
           <button onClick={resetGame} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "6px 14px", color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>↻</button>
         </div>
@@ -372,7 +462,21 @@ export default function Spike() {
 
       {/* Main game area */}
       <div ref={containerRef} style={{ position: "relative", zIndex: 10, height: "calc(100vh - 120px)", margin: "0 8px" }}>
-        <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", zIndex: 1 }} />
+        
+        {/* Chart controls hint */}
+        <div style={{ position: "absolute", bottom: 10, left: 10, zIndex: 30, background: "rgba(13,8,21,0.9)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, padding: "8px 12px", fontSize: 9, color: "rgba(255,255,255,0.4)", fontWeight: 600, pointerEvents: "none" }}>
+          <div>🖱️ Scroll to zoom • Drag to pan</div>
+        </div>
+
+        <canvas 
+          ref={canvasRef} 
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", zIndex: 1, cursor: isDragging ? "grabbing" : "grab" }} 
+          onWheel={handleWheel}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+        />
 
         {/* Bet blocks — absolutely positioned, scroll with chart */}
         {visibleBets.map(bet => {
